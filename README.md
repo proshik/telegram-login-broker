@@ -99,6 +99,19 @@ TELEGRAM_EXPECTED_ISSUER=https://<брокер>
 брокера токен читается и даёт правильную личность; второй — что с дефолтным
 issuer'ом Telegram тот же токен отвергается.
 
+## Docker
+
+```sh
+docker build -t telegram-login-broker:dev .
+```
+
+`distroless/static`, а не `scratch`: в `scratch` нет корневых сертификатов, и
+образ работал бы в mock-режиме идеально, а против настоящего Telegram падал бы на
+TLS. Реестр лежит в `/data` — это том, и без него конфигурация умрёт на первом
+редеплое.
+
+Готовый `compose.dev.yaml` с брокером в mock и Postgres лежит в kotlin-app.
+
 ## Потребители
 
 - `kotlin-app` — Kotlin/Spring
