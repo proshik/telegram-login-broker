@@ -1,0 +1,15 @@
+{{define "title"}}telegram-login-broker{{end}}
+{{define "body"}}
+<h1>telegram-login-broker</h1>
+<p>Постоянный публичный адрес для входа через Telegram. Приложению достаточно
+одной переменной <code>TELEGRAM_OAUTH_BASE_URL</code>.</p>
+<dl>
+  <dt>Режим</dt><dd>{{.Mode}}</dd>
+  <dt>Issuer</dt><dd><code>{{.Issuer}}</code></dd>
+  <dt>Callback для BotFather</dt><dd><code>{{.Callback}}</code></dd>
+</dl>
+{{if .Users}}
+<p>Личности mock-режима:</p>
+<ul>{{range .Users}}<li><span class="who">{{.Name}}</span> <span class="id">{{.ID}}</span></li>{{end}}</ul>
+{{end}}
+{{end}}

@@ -1,0 +1,20 @@
+{{define "title"}}Вход — выбор личности{{end}}
+{{define "body"}}
+<h1>Кто заходит?</h1>
+<p>Это mock-режим: настоящего Telegram здесь нет. Брокер слушает только loopback,
+иначе он бы не запустился.</p>
+<form method="post" action="/auth/select">
+  <input type="hidden" name="flow" value="{{.Flow}}">
+  <ul>
+    {{range .Users}}
+    <li>
+      <button type="submit" name="id" value="{{.ID}}">
+        <span class="who">{{.Name}}</span>
+        {{if .Username}}<span class="id">@{{.Username}}</span>{{end}}
+        <br><span class="id">{{.ID}}</span>
+      </button>
+    </li>
+    {{end}}
+  </ul>
+</form>
+{{end}}
