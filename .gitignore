@@ -13,3 +13,8 @@ registry.json
 .DS_Store
 .idea/
 *.swp
+
+# рабочие документы — не для публичного репозитория: они разбирают
+# внутренние сервисы поимённо
+/PLAN.md
+/docs/VERIFICATION.md

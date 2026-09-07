@@ -140,7 +140,9 @@ func encodeSegment(v any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// RawURLEncoding, never StdEncoding: a single "=" makes the token undecodable
-	// in go-app while still working in kotlin-app.
+	// RawURLEncoding, never StdEncoding. Go's RawURLEncoding refuses a padded
+	// segment while Java's getUrlDecoder swallows it, so a single "=" produces a
+	// token that works in one consumer and fails in another — which reads as
+	// "that service is broken" rather than as a token problem.
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }

@@ -14,14 +14,15 @@ import (
 	"github.com/proshik/telegram-login-broker/internal/oidc"
 )
 
-// This file holds a verbatim copy of go-app's id_token parser
-// (internal/web/oidc.go, after the phase 2 tightening), run against the broker's
-// real /token output. Contract drift between the two shows up here rather than
-// in a browser.
+// A reference implementation of a strict consumer's id_token parser, run against
+// the broker's real /token output. It is deliberately written the way a careful
+// consumer would write it — every claim mandatory, the issuer compared byte for
+// byte — and kept identical to the parser in the application that actually uses
+// this broker.
 //
-// Do not tidy this copy. The moment it stops being a copy it stops proving
-// anything. The only change from the original is that expectedIssuer and
-// clientID arrive as parameters instead of through the OIDCClient receiver.
+// Do not tidy it. Its only value is being the same code as the one in
+// production; the moment the two diverge, this proves nothing. Contract drift
+// shows up here rather than in a browser.
 
 type telegramUser struct {
 	ID        int64
@@ -32,7 +33,7 @@ type telegramUser struct {
 
 const clockSkew = 60 * time.Second
 
-func parseIDTokenGoApp(raw, clientID, expectedIssuer string) (*telegramUser, error) {
+func parseIDTokenStrictConsumer(raw, clientID, expectedIssuer string) (*telegramUser, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("unexpected id_token format: got %d segments, want 3", len(parts))
@@ -194,15 +195,15 @@ func (h *harness) idTokenFor(t *testing.T, q url.Values) string {
 	return payload.IDToken
 }
 
-func TestGoAppsParserAcceptsTheBrokersToken(t *testing.T) {
-	// The whole point of phase 2: with the broker's issuer configured, go-app's
-	// real parser reads the broker's real token and gets the right person.
+func TestAStrictConsumerAcceptsTheBrokersToken(t *testing.T) {
+	// The whole point: with the broker's issuer configured, a strict consumer
+	// reads the broker's real token and gets the right person.
 	h := newContractHarness(t)
 	idToken := h.idTokenFor(t, authQuery())
 
-	user, err := parseIDTokenGoApp(idToken, appClientID, brokerIssuer)
+	user, err := parseIDTokenStrictConsumer(idToken, appClientID, brokerIssuer)
 	if err != nil {
-		t.Fatalf("go-app's parser rejected the broker's id_token: %v", err)
+		t.Fatalf("a strict consumer rejected the broker's id_token: %v", err)
 	}
 	if user.ID != 987654321 {
 		t.Errorf("ID = %d, want 987654321", user.ID)
@@ -222,9 +223,9 @@ func TestPointingAtTheBrokerHasToBeConfigured(t *testing.T) {
 	h := newContractHarness(t)
 	idToken := h.idTokenFor(t, authQuery())
 
-	_, err := parseIDTokenGoApp(idToken, appClientID, "https://oauth.telegram.org")
+	_, err := parseIDTokenStrictConsumer(idToken, appClientID, "https://oauth.telegram.org")
 	if err == nil {
-		t.Fatal("go-app's parser accepted the broker's token while configured for Telegram")
+		t.Fatal("a strict consumer accepted the broker's token while configured for Telegram")
 	}
 	if !strings.Contains(err.Error(), "iss") {
 		t.Errorf("refused for %q, want the issuer check", err)
@@ -239,7 +240,7 @@ func TestTheBrokersTokenSatisfiesEveryMandatoryClaim(t *testing.T) {
 
 	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(idToken, ".")[1])
 	if err != nil {
-		t.Fatalf("go-app's strict RawURLEncoding cannot read the payload: %v", err)
+		t.Fatalf("strict RawURLEncoding cannot read the payload: %v", err)
 	}
 	var claims map[string]any
 	if err := json.Unmarshal(payload, &claims); err != nil {

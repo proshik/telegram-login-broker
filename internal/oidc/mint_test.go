@@ -34,9 +34,9 @@ func testIdentity() Identity {
 	}
 }
 
-// decodeSegment mirrors Go's strict RawURLEncoding, which is what go-app uses.
-// A token carrying padding decodes in Java and fails here — the asymmetry that
-// makes such a bug look like "go-app is broken".
+// decodeSegment mirrors Go's strict RawURLEncoding. A token carrying padding
+// decodes in Java and fails here — the asymmetry that makes such a bug look like
+// "the Go service is broken".
 func decodeSegment(t *testing.T, seg string) map[string]any {
 	t.Helper()
 	raw, err := base64.RawURLEncoding.DecodeString(seg)

@@ -14,8 +14,8 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	// time anyone objects to its size.
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 
-	// Feign appends ";charset=UTF-8"; comparing the header with == would reject
-	// every request kotlin-app makes.
+	// Spring's Feign appends ";charset=UTF-8"; comparing the header with ==
+	// would reject every request such a client makes.
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mediaType, _, err := mime.ParseMediaType(ct)
 		if err != nil || mediaType != "application/x-www-form-urlencoded" {
@@ -87,10 +87,10 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	s.opts.Logger.Info("issued id_token", "client_id", clientID, "telegram_id", issued.Identity.ID)
 
-	// Exactly these three keys. access_token and token_type are non-null in
-	// kotlin-app's Kotlin TokenResponse, so dropping either breaks
-	// deserialization before the application ever sees the token; extra keys buy
-	// nothing and risk someone else's Jackson configuration.
+	// Exactly these three keys. In a Kotlin client access_token and token_type
+	// are non-null fields, so dropping either breaks deserialization before the
+	// application ever sees the token; extra keys buy nothing and risk someone
+	// else's Jackson configuration.
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]string{

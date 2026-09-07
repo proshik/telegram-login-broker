@@ -393,7 +393,7 @@ func TestTokenReturnsExactlyThreeKeys(t *testing.T) {
 		t.Errorf("token_type = %v, want Bearer", payload["token_type"])
 	}
 	if strings.Contains(payload["id_token"].(string), "=") {
-		t.Error("id_token carries base64 padding; go-app's RawURLEncoding refuses it")
+		t.Error("id_token carries base64 padding; Go's RawURLEncoding refuses it")
 	}
 	if strings.Count(payload["access_token"].(string), ".") == 2 {
 		t.Error("access_token looks like a JWT; it is opaque and nothing accepts it, so it must not pretend otherwise")
@@ -478,7 +478,7 @@ func TestTokenIgnoresQueryStringParameters(t *testing.T) {
 
 func TestTokenAcceptsFeignsCharsetSuffix(t *testing.T) {
 	// Feign sends "application/x-www-form-urlencoded;charset=UTF-8"; comparing the
-	// header with == rejects every request kotlin-app makes.
+	// header with == rejects every request such a client makes.
 	h := newHarness(t, nil)
 	code := h.codeFor(t, authQuery(), "987654321")
 
