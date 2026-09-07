@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -271,5 +273,53 @@ func TestExchangeSurfacesAnUpstreamError(t *testing.T) {
 	tg := New(srv.URL, srv.Client(), false, fixedNow)
 	if _, err := tg.Exchange(context.Background(), testBot, "c", "v", "https://broker.example.com/callback"); err == nil {
 		t.Error("Exchange() ignored a 400 from the token endpoint")
+	}
+}
+
+func TestClaimSetIsLoggedOnFirstUpstreamToken(t *testing.T) {
+	// The plan makes this the prerequisite for tightening the consumers: before
+	// anyone makes iss/aud/exp mandatory, somebody has to look at what real
+	// Telegram actually sends. Claim *names* only — the values are the person who
+	// just logged in, and logs are the wrong place for them.
+	stub := newStubTelegram(t)
+	var logged bytes.Buffer
+	tg := New(stub.URL, stub.Client(), true, fixedNow)
+	tg.SetLogger(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if _, err := tg.Exchange(context.Background(), testBot, "c", "v", "https://broker.example.com/callback"); err != nil {
+		t.Fatal(err)
+	}
+
+	out := logged.String()
+	if !strings.Contains(out, "upstream id_token claim set") {
+		t.Fatalf("the claim set was not logged: %s", out)
+	}
+	for _, claim := range []string{"iss", "aud", "sub", "id", "exp", "name", "preferred_username", "picture"} {
+		if !strings.Contains(out, claim) {
+			t.Errorf("claim %q is missing from the logged set: %s", claim, out)
+		}
+	}
+	// The values must not be there. A photo URL and a display name are the person.
+	for _, value := range []string{"Пётр Кузнецов", "petr", "1234123412341234123", "987654321"} {
+		if strings.Contains(out, value) {
+			t.Errorf("claim value %q leaked into the log: %s", value, out)
+		}
+	}
+}
+
+func TestTheClaimSetIsLoggedOnceNotPerLogin(t *testing.T) {
+	// It is a one-off observation, not a running commentary on every login.
+	stub := newStubTelegram(t)
+	var logged bytes.Buffer
+	tg := New(stub.URL, stub.Client(), true, fixedNow)
+	tg.SetLogger(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	for range 3 {
+		if _, err := tg.Exchange(context.Background(), testBot, "c", "v", "https://broker.example.com/callback"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(logged.String(), "upstream id_token claim set"); n != 1 {
+		t.Errorf("the claim set was logged %d times, want once", n)
 	}
 }

@@ -11,10 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/proshik/telegram-login-broker/internal/oidc"
@@ -29,6 +33,9 @@ type Telegram struct {
 	keys   *oidc.KeySet
 	verify bool
 	now    func() time.Time
+
+	logger      *slog.Logger
+	logClaimSet sync.Once
 }
 
 func New(baseURL string, hc *http.Client, verify bool, now func() time.Time) *Telegram {
@@ -39,9 +46,15 @@ func New(baseURL string, hc *http.Client, verify bool, now func() time.Time) *Te
 	if now == nil {
 		now = time.Now
 	}
-	t := &Telegram{base: base, http: hc, verify: verify, now: now}
+	t := &Telegram{base: base, http: hc, verify: verify, now: now, logger: slog.Default()}
 	t.keys = oidc.NewKeySet(t.fetchJWKS, now, 5*time.Minute)
 	return t
+}
+
+func (t *Telegram) SetLogger(l *slog.Logger) {
+	if l != nil {
+		t.logger = l
+	}
 }
 
 // AuthURL is where the browser goes. Only the bot's public client_id travels
@@ -124,6 +137,16 @@ func (t *Telegram) identityFrom(ctx context.Context, idToken string) (oidc.Ident
 			return oidc.Identity{}, err
 		}
 	}
+
+	// Which claims Telegram actually sends is the thing to know before anyone
+	// makes them mandatory downstream: `id` is documented in prose but absent
+	// from claims_supported, so only a real login settles it. Names only, sorted,
+	// once per process — the values are the person who just logged in.
+	t.logClaimSet.Do(func() {
+		t.logger.Info("upstream id_token claim set",
+			"claims", strings.Join(slices.Sorted(maps.Keys(claims)), ","),
+			"verified", t.verify)
+	})
 
 	if iss, _ := claims["iss"].(string); iss != t.base {
 		return oidc.Identity{}, fmt.Errorf("id_token iss is %q, want %q", iss, t.base)

@@ -69,7 +69,9 @@ func run(logger *slog.Logger) error {
 		Logger:   logger,
 	}
 	if !cfg.MockEnabled {
-		opts.Upstream = upstream.New(upstream.DefaultBaseURL, nil, cfg.VerifyUpstream, time.Now)
+		tg := upstream.New(upstream.DefaultBaseURL, nil, cfg.VerifyUpstream, time.Now)
+		tg.SetLogger(logger)
+		opts.Upstream = tg
 		if !cfg.VerifyUpstream {
 			logger.Warn("upstream id_token verification is OFF; whoever answers as Telegram decides who logs in")
 		}
