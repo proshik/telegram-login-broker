@@ -189,3 +189,21 @@ func (r *Registry) Update(mutate func(*Data) error) error {
 	r.data = next
 	return nil
 }
+
+// EnsureClients registers or updates applications from configuration, leaving
+// every client it does not name alone.
+//
+// It is how an application gets registered until the admin interface arrives in
+// phase 7: put it in the environment and restart. Editing the file by hand is
+// not an option, because the secrets in it are sealed.
+func (r *Registry) EnsureClients(clients map[string]Client) error {
+	if len(clients) == 0 {
+		return nil
+	}
+	return r.Update(func(d *Data) error {
+		for name, c := range clients {
+			d.Clients[name] = c
+		}
+		return nil
+	})
+}

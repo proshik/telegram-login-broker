@@ -25,6 +25,11 @@ type PendingAuth struct {
 	// /callback is what distinguishes "the same browser came back" from "an
 	// attacker finished a login and handed over the link".
 	Browser string
+	// UpstreamVerifier is the broker's own PKCE verifier for its exchange with
+	// Telegram. It is unrelated to the application's code_challenge above: the
+	// broker is a client of Telegram and a provider to the application, and the
+	// two PKCE pairs must not be confused.
+	UpstreamVerifier string
 }
 
 // IssuedCode is an authorization code waiting on /token.

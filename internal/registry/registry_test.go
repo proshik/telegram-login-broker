@@ -239,3 +239,62 @@ func TestSaveLeavesNoTemporaryFileBehind(t *testing.T) {
 		t.Errorf("directory holds %v, want only the registry file", names)
 	}
 }
+
+func TestEnsureClientsUpsertsAndPersists(t *testing.T) {
+	// Until the admin interface exists in phase 7, this is the only way to
+	// register an application: put it in the environment and restart.
+	r, path := newTestRegistry(t)
+
+	err := r.EnsureClients(map[string]Client{
+		"go-app":   {Secret: "rotated-secret"},
+		"newcomer": {Secret: "app-secret-n", Bot: "kotlin-app"},
+	})
+	if err != nil {
+		t.Fatalf("EnsureClients() = %v", err)
+	}
+
+	c, _, err := r.ResolveClient("newcomer")
+	if err != nil || c.Secret != "app-secret-n" {
+		t.Errorf("newcomer not registered: %v %+v", err, c)
+	}
+	if c, _, _ := r.ResolveClient("go-app"); c.Secret != "rotated-secret" {
+		t.Errorf("go-app secret = %q, want the rotated one", c.Secret)
+	}
+	// Clients that were already there and are not mentioned stay untouched.
+	if _, _, err := r.ResolveClient("kotlin-app"); err != nil {
+		t.Errorf("an unmentioned client disappeared: %v", err)
+	}
+
+	box, _ := NewBox(testKey())
+	reloaded, err := Load(path, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reloaded.ResolveClient("newcomer"); err != nil {
+		t.Errorf("the change did not survive a reload: %v", err)
+	}
+}
+
+func TestEnsureClientsRejectsAnInvalidClient(t *testing.T) {
+	r, _ := newTestRegistry(t)
+
+	if err := r.EnsureClients(map[string]Client{"broken": {Secret: "x", Bot: "nope"}}); err == nil {
+		t.Error("EnsureClients() accepted a client pointing at a bot that does not exist")
+	}
+	if _, _, err := r.ResolveClient("broken"); err == nil {
+		t.Error("the rejected client is live")
+	}
+}
+
+func TestEnsureClientsIsANoOpWhenNothingIsGiven(t *testing.T) {
+	r, path := newTestRegistry(t)
+	before, _ := os.ReadFile(path)
+
+	if err := r.EnsureClients(nil); err != nil {
+		t.Fatalf("EnsureClients(nil) = %v", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Error("EnsureClients(nil) rewrote the file")
+	}
+}
