@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,14 +10,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/proshik/telegram-login-broker/internal/oidc"
 )
 
 // This file holds a verbatim copy of go-app's id_token parser
-// (internal/web/oidc.go), run against the broker's real /token output. Contract
-// drift between the two shows up here rather than in a browser.
+// (internal/web/oidc.go, after the phase 2 tightening), run against the broker's
+// real /token output. Contract drift between the two shows up here rather than
+// in a browser.
 //
 // Do not tidy this copy. The moment it stops being a copy it stops proving
-// anything.
+// anything. The only change from the original is that expectedIssuer and
+// clientID arrive as parameters instead of through the OIDCClient receiver.
 
 type telegramUser struct {
 	ID        int64
@@ -25,9 +30,11 @@ type telegramUser struct {
 	PhotoURL  string
 }
 
-func parseIDTokenGoApp(raw, clientID string) (*telegramUser, error) {
+const clockSkew = 60 * time.Second
+
+func parseIDTokenGoApp(raw, clientID, expectedIssuer string) (*telegramUser, error) {
 	parts := strings.Split(raw, ".")
-	if len(parts) < 3 {
+	if len(parts) != 3 {
 		return nil, fmt.Errorf("unexpected id_token format: got %d segments, want 3", len(parts))
 	}
 
@@ -36,19 +43,41 @@ func parseIDTokenGoApp(raw, clientID string) (*telegramUser, error) {
 		return nil, fmt.Errorf("decode id_token payload: %w", err)
 	}
 
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.UseNumber()
 	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
+	if err := dec.Decode(&claims); err != nil {
 		return nil, fmt.Errorf("parse id_token claims: %w", err)
 	}
 
-	if exp, ok := claims["exp"].(float64); ok && int64(exp) <= time.Now().Unix() {
+	iss, _ := claims["iss"].(string)
+	if iss == "" {
+		return nil, fmt.Errorf("id_token has no iss claim")
+	}
+	if iss != expectedIssuer {
+		return nil, fmt.Errorf("id_token iss is %q, want %q", iss, expectedIssuer)
+	}
+
+	if err := checkAudience(claims["aud"], clientID); err != nil {
+		return nil, err
+	}
+
+	exp, err := claimUnix(claims["exp"])
+	if err != nil {
+		return nil, fmt.Errorf("id_token exp claim: %w", err)
+	}
+	now := time.Now()
+	if !now.Before(exp) {
 		return nil, fmt.Errorf("id_token has expired")
 	}
-	if aud, ok := claims["aud"].(string); ok && aud != clientID {
-		return nil, fmt.Errorf("id_token aud mismatch")
-	}
-	if iss, ok := claims["iss"].(string); ok && !strings.Contains(strings.ToLower(iss), "telegram") {
-		return nil, fmt.Errorf("id_token iss mismatch: %s", iss)
+	if raw, present := claims["iat"]; present {
+		iat, err := claimUnix(raw)
+		if err != nil {
+			return nil, fmt.Errorf("id_token iat claim: %w", err)
+		}
+		if iat.After(now.Add(clockSkew)) {
+			return nil, fmt.Errorf("id_token iat is %s, which is in the future", iat)
+		}
 	}
 
 	id, err := claimInt64(claims["id"])
@@ -64,8 +93,52 @@ func parseIDTokenGoApp(raw, clientID string) (*telegramUser, error) {
 	}, nil
 }
 
+func checkAudience(v any, clientID string) error {
+	switch aud := v.(type) {
+	case string:
+		if aud != clientID {
+			return fmt.Errorf("id_token aud is %q, want %q", aud, clientID)
+		}
+		return nil
+	case []any:
+		for _, entry := range aud {
+			if s, ok := entry.(string); ok && s == clientID {
+				return nil
+			}
+		}
+		return fmt.Errorf("id_token aud %v does not contain %q", aud, clientID)
+	case nil:
+		return fmt.Errorf("id_token has no aud claim")
+	default:
+		return fmt.Errorf("id_token aud is a %T, want a string or an array of strings", v)
+	}
+}
+
+func claimUnix(v any) (time.Time, error) {
+	switch t := v.(type) {
+	case json.Number:
+		n, err := t.Int64()
+		if err != nil {
+			return time.Time{}, fmt.Errorf("not a whole number: %q", t)
+		}
+		return time.Unix(n, 0), nil
+	case float64:
+		return time.Unix(int64(t), 0), nil
+	case nil:
+		return time.Time{}, fmt.Errorf("missing")
+	default:
+		return time.Time{}, fmt.Errorf("is a %T, want a number", v)
+	}
+}
+
 func claimInt64(v any) (int64, error) {
 	switch t := v.(type) {
+	case json.Number:
+		n, err := t.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("not a whole number: %q", t)
+		}
+		return n, nil
 	case float64:
 		return int64(t), nil
 	case string:
@@ -86,6 +159,26 @@ func claimString(v any) string {
 
 // --- the contract ------------------------------------------------------------
 
+const brokerIssuer = "https://broker.example.com"
+
+// newContractHarness signs on the real clock. Everywhere else the tests freeze
+// time, but the consumer's parser calls time.Now(), so exp and iat have to be
+// measured against the same clock it uses or the comparison proves nothing.
+func newContractHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarness(t, func(o *Options) {
+		key, err := oidc.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer, err := oidc.NewSigner(key, brokerIssuer, 5*time.Minute, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Signer = signer
+	})
+}
+
 func (h *harness) idTokenFor(t *testing.T, q url.Values) string {
 	t.Helper()
 	code := h.codeFor(t, q, "987654321")
@@ -101,16 +194,50 @@ func (h *harness) idTokenFor(t *testing.T, q url.Values) string {
 	return payload.IDToken
 }
 
-func TestGoAppParserReadsEverythingButTheIssuer(t *testing.T) {
-	// Everything structural has to hold: three segments, no padding, an id claim
-	// of the right type, aud as a bare string. The parser is run with the issuer
-	// check lifted, so a failure here is a real contract break rather than the
-	// deliberate issuer choice.
-	h := newHarness(t, nil)
+func TestGoAppsParserAcceptsTheBrokersToken(t *testing.T) {
+	// The whole point of phase 2: with the broker's issuer configured, go-app's
+	// real parser reads the broker's real token and gets the right person.
+	h := newContractHarness(t)
 	idToken := h.idTokenFor(t, authQuery())
 
-	parts := strings.Split(idToken, ".")
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	user, err := parseIDTokenGoApp(idToken, appClientID, brokerIssuer)
+	if err != nil {
+		t.Fatalf("go-app's parser rejected the broker's id_token: %v", err)
+	}
+	if user.ID != 987654321 {
+		t.Errorf("ID = %d, want 987654321", user.ID)
+	}
+	if user.FirstName != "Пётр Кузнецов" {
+		t.Errorf("FirstName = %q; Cyrillic did not survive", user.FirstName)
+	}
+	if user.Username != "petr" {
+		t.Errorf("Username = %q", user.Username)
+	}
+}
+
+func TestPointingAtTheBrokerHasToBeConfigured(t *testing.T) {
+	// Left on Telegram's issuer, the same token is refused. That is the property
+	// the deliberately non-"telegram" issuer buys: a broker cannot be slipped in
+	// behind an application that was not reconfigured for it.
+	h := newContractHarness(t)
+	idToken := h.idTokenFor(t, authQuery())
+
+	_, err := parseIDTokenGoApp(idToken, appClientID, "https://oauth.telegram.org")
+	if err == nil {
+		t.Fatal("go-app's parser accepted the broker's token while configured for Telegram")
+	}
+	if !strings.Contains(err.Error(), "iss") {
+		t.Errorf("refused for %q, want the issuer check", err)
+	}
+}
+
+func TestTheBrokersTokenSatisfiesEveryMandatoryClaim(t *testing.T) {
+	// Each of these is now mandatory in both consumers, so a token missing one is
+	// no longer merely unchecked — it is refused.
+	h := newContractHarness(t)
+	idToken := h.idTokenFor(t, authQuery())
+
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(idToken, ".")[1])
 	if err != nil {
 		t.Fatalf("go-app's strict RawURLEncoding cannot read the payload: %v", err)
 	}
@@ -118,67 +245,19 @@ func TestGoAppParserReadsEverythingButTheIssuer(t *testing.T) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		t.Fatal(err)
 	}
+	if iss, _ := claims["iss"].(string); iss != brokerIssuer {
+		t.Errorf("iss = %#v, want exactly %q", claims["iss"], brokerIssuer)
+	}
 	if aud, ok := claims["aud"].(string); !ok || aud != appClientID {
-		t.Errorf("aud = %#v; as anything but a string the audience check silently stops running", claims["aud"])
-	}
-	id, err := claimInt64(claims["id"])
-	if err != nil {
-		t.Fatalf("go-app cannot read the id claim: %v", err)
-	}
-	if id != 987654321 {
-		t.Errorf("id = %d, want 987654321", id)
-	}
-	if claimString(claims["name"]) != "Пётр Кузнецов" {
-		t.Errorf("name = %q; Cyrillic did not survive", claimString(claims["name"]))
-	}
-}
-
-func TestGoAppParserStillRejectsTheIssuerUntilPhaseTwo(t *testing.T) {
-	// This failure is the plan working as intended, not a bug. The issuer is
-	// deliberately free of the substring "telegram" so that swapping the real
-	// provider for the broker can never happen silently — which means phase 2,
-	// where both consumers switch to an exact expected-issuer check, has to ship
-	// alongside this. Until it does, the login fails on its last step.
-	//
-	// When phase 2 lands and this test starts failing, delete it. That failure is
-	// the signal that the consumers no longer need it.
-	h := newHarness(t, nil)
-	idToken := h.idTokenFor(t, authQuery())
-
-	_, err := parseIDTokenGoApp(idToken, appClientID)
-	if err == nil {
-		t.Fatal("go-app's current parser accepted the broker's issuer; either phase 2 shipped or the issuer rule was quietly broken")
-	}
-	if !strings.Contains(err.Error(), "iss mismatch") {
-		t.Errorf("go-app rejected the token for %q, want the issuer check — anything else is a real contract break", err)
-	}
-}
-
-func TestGoAppParserAcceptsTheTokenUnderPhaseTwoRules(t *testing.T) {
-	// Phase 2 replaces "iss contains telegram" with exact equality against a
-	// configured expected-issuer. Under that rule the very same token parses.
-	h := newHarness(t, nil)
-	idToken := h.idTokenFor(t, authQuery())
-
-	parts := strings.Split(idToken, ".")
-	payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		t.Fatal(err)
-	}
-
-	const expectedIssuer = "https://broker.example.com"
-	iss, ok := claims["iss"].(string)
-	if !ok {
-		t.Fatal("phase 2 makes iss mandatory, and it is absent")
-	}
-	if iss != expectedIssuer {
-		t.Errorf("iss = %q, want exactly %q", iss, expectedIssuer)
-	}
-	if _, ok := claims["aud"].(string); !ok {
-		t.Error("phase 2 makes aud mandatory as a string")
+		t.Errorf("aud = %#v; as anything but a string the audience check used to stop running silently", claims["aud"])
 	}
 	if _, ok := claims["exp"].(float64); !ok {
-		t.Error("phase 2 makes exp mandatory")
+		t.Error("exp is missing or not a number")
+	}
+	if _, ok := claims["iat"].(float64); !ok {
+		t.Error("iat is missing or not a number")
+	}
+	if id, err := claimInt64(claims["id"]); err != nil || id != 987654321 {
+		t.Errorf("id = %#v (%v)", claims["id"], err)
 	}
 }
