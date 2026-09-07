@@ -117,6 +117,21 @@ TLS. Реестр лежит в `/data` — это том, и без него к
 
 Готовый `compose.dev.yaml` с брокером в mock и Postgres лежит в kotlin-app.
 
+### Релиз образа
+
+CI гоняет `gofmt`, `go vet` и `go test -race` на каждый push. Образ собирается и
+уезжает в GHCR **только на тег**:
+
+```sh
+git tag -a v0.1.0 -m "фаза 1: режим входа"
+git push origin v0.1.0
+```
+
+Получится `ghcr.io/proshik/telegram-login-broker:0.1.0` и `:0.1` под
+`linux/amd64` и `linux/arm64`. Тега `latest` нет намеренно: деплой пинит версию, а
+IdP, молча катящийся вперёд, — не то, что нужно. Деплоить по digest'у или по
+точной версии.
+
 ## Потребители
 
 - `kotlin-app` — Kotlin/Spring
