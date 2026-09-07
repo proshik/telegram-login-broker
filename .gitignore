@@ -1,0 +1,15 @@
+# сборка
+/bin/
+/broker
+/broker-agent
+
+# локальное состояние и секреты
+.env
+*.local.json
+/data/
+registry.json
+
+# редакторы / ОС
+.DS_Store
+.idea/
+*.swp
