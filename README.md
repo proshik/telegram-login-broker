@@ -18,6 +18,65 @@ Telegram принимает только публично-резолвимые H
 Проверено только против собственного mock-режима и против стаба Telegram в
 тестах. С живым `oauth.telegram.org` не работал ещё ни один вход.
 
+## Как проходит вход
+
+Приложение работает с брокером как с OIDC-провайдером (authorization code + PKCE).
+Брокер ведёт со своей стороны отдельный OIDC-вход у Telegram: свой `state`, свой
+PKCE и единственный `redirect_uri` — `<брокер>/callback`. Порт приложения Telegram
+не видит, его видит только брокер.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Браузер
+    participant A as Приложение<br/>http://localhost:PORT
+    participant K as Брокер
+    participant T as Telegram<br/>oauth.telegram.org
+
+    B->>A: «Войти через Telegram»
+    A-->>B: 302 → брокер /auth
+    B->>K: GET /auth?client_id, redirect_uri=http://localhost:PORT/…,<br/>state, code_challenge (S256), response_type=code
+    Note over K: client_id есть в реестре,<br/>redirect_uri — loopback или из redirect_origins.<br/>Запоминает flow, ставит куку __Host-broker_flow
+    K-->>B: 302 → Telegram /auth
+    B->>T: GET /auth?client_id бота, redirect_uri=брокер/callback,<br/>scope=openid profile, state=flow, свой code_challenge
+    Note over B,T: пользователь входит в Telegram
+    T-->>B: 302 → брокер /callback?code, state=flow
+    B->>K: GET /callback (с кукой __Host-broker_flow)
+    Note over K: flow одноразовый, кука сверяется с ним
+    K->>T: POST /token (Basic: client_id и secret бота),<br/>code, code_verifier
+    T-->>K: id_token
+    K->>T: GET /.well-known/jwks.json (ключи кешируются)
+    Note over K: подпись, iss, exp, claim id,<br/>BROKER_ALLOWED_TELEGRAM_IDS.<br/>Выпускает свой одноразовый code
+    K-->>B: 302 → http://localhost:PORT/…?code, state
+    B->>A: GET redirect_uri?code, state
+    A->>K: POST /token: grant_type=authorization_code, code,<br/>client_id, client_secret, redirect_uri, code_verifier
+    K-->>A: access_token, token_type=Bearer, id_token (ES256)
+    Note over A: iss id_token сверяется с TELEGRAM_EXPECTED_ISSUER
+```
+
+В mock-режиме Telegram нет: вместо него брокер показывает страницу выбора
+тестового пользователя из `BROKER_MOCK_USERS`. Начало и конец те же —
+`GET /auth` и `POST /token`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Браузер
+    participant A as Приложение<br/>http://localhost:PORT
+    participant K as Брокер (mock, loopback)
+
+    B->>K: GET /auth?client_id, redirect_uri, state, code_challenge
+    K-->>B: 200, страница выбора пользователя (BROKER_MOCK_USERS)
+    B->>K: POST /auth/select: flow, id
+    K-->>B: 302 → http://localhost:PORT/…?code, state
+    B->>A: GET redirect_uri?code, state
+    A->>K: POST /token
+    K-->>A: access_token, token_type=Bearer, id_token
+```
+
+Схемы для релея вебхуков пока нет: он запланирован на фазу 6 и в коде ещё не
+появился.
+
 ## Быстрый старт, mock
 
 Ничего от Telegram не нужно: mock не ходит наружу и стартует только на loopback.
