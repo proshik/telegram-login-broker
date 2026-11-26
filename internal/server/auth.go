@@ -88,7 +88,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	s.setBinding(w, binding)
 
 	if s.opts.Config.MockEnabled {
-		s.renderChooser(w, flow)
+		s.renderChooser(w, flow, redirectURI)
 		return
 	}
 	http.Redirect(w, r,
